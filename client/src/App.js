@@ -77,6 +77,7 @@ export default function App() {
   const [nearbyPlayer, setNearbyPlayer] = useState(null);
   const [winner, setWinner] = useState(null);
   const [meetingReason, setMeetingReason] = useState('');
+  const [maxPlayers, setMaxPlayers] = useState(10);
 
   const socketRef = useRef(null);
   const gameAreaRef = useRef(null);
@@ -254,7 +255,7 @@ export default function App() {
   // ── Handlers ──
   const createRoom = () => {
     if (!playerName.trim()) return;
-    socketRef.current?.emit('createRoom', { name: playerName }, ({ code, color }) => {
+    socketRef.current?.emit('createRoom', { name: playerName, maxPlayers }, ({ code, color }) => {
       setRoomCode(code);
       setMyId(socketRef.current.id);
       setMyColor(color);
@@ -334,7 +335,7 @@ export default function App() {
   // ── Render ──
   return (
     <div className="app">
-      {screen === 'menu' && <MenuScreen playerName={playerName} setPlayerName={setPlayerName} joinCode={joinCode} setJoinCode={setJoinCode} createRoom={createRoom} joinRoom={joinRoom} />}
+      {screen === 'menu' && <MenuScreen playerName={playerName} setPlayerName={setPlayerName} joinCode={joinCode} setJoinCode={setJoinCode} createRoom={createRoom} joinRoom={joinRoom} maxPlayers={maxPlayers} setMaxPlayers={setMaxPlayers} />}
       {screen === 'lobby' && <LobbyScreen roomCode={roomCode} players={gameState?.players || {}} isHost={isHost} startGame={startGame} myId={myId} />}
       {screen === 'game' && gameState && (
         <GameScreen
@@ -382,7 +383,7 @@ export default function App() {
 // ══════════════════════════════════════════════════════════════════════════════
 // MENU SCREEN
 // ══════════════════════════════════════════════════════════════════════════════
-function MenuScreen({ playerName, setPlayerName, joinCode, setJoinCode, createRoom, joinRoom }) {
+function MenuScreen({ playerName, setPlayerName, joinCode, setJoinCode, createRoom, joinRoom, maxPlayers, setMaxPlayers }) {
   return (
     <div className="screen menu-screen">
       <div className="menu-stars" />
@@ -398,6 +399,18 @@ function MenuScreen({ playerName, setPlayerName, joinCode, setJoinCode, createRo
             maxLength={12}
           />
           <div className="menu-buttons">
+            <div className="size-selector">
+              <span className="size-label">Taille max de la partie :</span>
+              <div className="size-options">
+                {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                  <button
+                    key={n}
+                    className={`size-btn ${maxPlayers === n ? 'active' : ''}`}
+                    onClick={() => setMaxPlayers(n)}
+                  >{n}</button>
+                ))}
+              </div>
+            </div>
             <button className="btn btn-primary" onClick={createRoom}>Créer une partie</button>
             <div className="join-row">
               <input
