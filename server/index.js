@@ -1,366 +1,675 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
-const { v4: uuidv4 } = require('uuid');
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@700;900&family=Share+Tech+Mono&display=swap');
 
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST'],
-  },
-});
-
-// ─── Game State ───────────────────────────────────────────────────────────────
-
-const COLORS = ['red', 'blue', 'green', 'purple', 'yellow', 'orange', 'pink', 'white', 'brown', 'cyan', 'lime', 'maroon'];
-
-const TASKS = [
-  { id: 'wires1', name: 'Fix Wiring', room: 'electrical', x: 18, y: 62, type: 'wires' },
-  { id: 'wires2', name: 'Fix Wiring', room: 'storage', x: 75, y: 72, type: 'wires' },
-  { id: 'cards', name: 'Swipe Card', room: 'admin', x: 50, y: 35, type: 'swipe' },
-  { id: 'asteroids', name: 'Clear Asteroids', room: 'weapons', x: 78, y: 20, type: 'asteroids' },
-  { id: 'download1', name: 'Download Data', room: 'nav', x: 22, y: 22, type: 'download' },
-  { id: 'download2', name: 'Download Data', room: 'comms', x: 47, y: 80, type: 'download' },
-  { id: 'fuel1', name: 'Fuel Engines', room: 'lower-engine', x: 28, y: 85, type: 'fuel' },
-  { id: 'fuel2', name: 'Fuel Engines', room: 'upper-engine', x: 28, y: 18, type: 'fuel' },
-  { id: 'align', name: 'Align Engine', room: 'upper-engine', x: 18, y: 25, type: 'download' },
-  { id: 'med', name: 'Submit Scan', room: 'medbay', x: 44, y: 55, type: 'download' },
-  { id: 'trash', name: 'Empty Garbage', room: 'o2', x: 37, y: 42, type: 'download' },
-  { id: 'chart', name: 'Chart Course', room: 'nav', x: 15, y: 28, type: 'swipe' },
-];
-
-const IMPOSTOR_COUNT = { 4: 1, 6: 1, 8: 2, 10: 2 };
-
-const rooms = {}; // roomCode -> gameState
-
-function createGameState() {
-  return {
-    phase: 'lobby',       // lobby | game | meeting | victory
-    players: {},          // socketId -> player
-    deadBodies: [],       // [{x,y,color,id}]
-    meetingCaller: null,
-    votes: {},            // socketId -> targetId | 'skip'
-    chatMessages: [],
-    winner: null,         // 'crewmate' | 'impostor'
-    emergencyUsed: {},    // socketId -> bool
-  };
+:root {
+  --bg-dark: #0a0a1a;
+  --bg-space: #060614;
+  --panel: #1a1a2e;
+  --panel2: #16213e;
+  --accent: #c51111;
+  --green: #117f2d;
+  --cyan: #38fedc;
+  --text: #e8e8f0;
+  --text-dim: #8888aa;
+  --border: rgba(255,255,255,0.08);
+  --ship-bg: #1e2d3d;
+  --ship-border: #2a4a6a;
+  --room-bg: rgba(30,60,100,0.5);
+  --room-border: #2a5a8a;
 }
 
-function assignTasks(playerId) {
-  const shuffled = [...TASKS].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, 4).map(t => ({ ...t, done: false }));
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg-space);
+  font-family: 'Nunito', sans-serif;
+  color: var(--text);
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
 }
 
-function spawnPosition() {
-  return { x: 45 + (Math.random() - 0.5) * 10, y: 50 + (Math.random() - 0.5) * 10 };
+.app { width: 100vw; height: 100vh; position: relative; }
+
+/* ── SCREEN BASE ── */
+.screen {
+  width: 100%; height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-function pickImpostors(players) {
-  const ids = Object.keys(players);
-  const count = IMPOSTOR_COUNT[Math.min(Math.max(ids.length, 4), 10)] || 1;
-  const shuffled = [...ids].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, count);
+/* ══════════════════════════════════
+   MENU
+══════════════════════════════════ */
+.menu-screen {
+  background: radial-gradient(ellipse at center, #0d1b2a 0%, #020410 100%);
+  position: relative;
+  overflow: hidden;
 }
 
-function checkVictory(state) {
-  const alive = Object.values(state.players).filter(p => p.alive);
-  const impostors = alive.filter(p => p.role === 'impostor');
-  const crewmates = alive.filter(p => p.role === 'crewmate');
-
-  if (impostors.length === 0) return 'crewmate';
-  if (impostors.length >= crewmates.length) return 'impostor';
-
-  // Check task completion
-  const allCrewmates = Object.values(state.players).filter(p => p.role === 'crewmate');
-  const allDone = allCrewmates.every(p => p.tasks.every(t => t.done));
-  if (allDone) return 'crewmate';
-
-  return null;
+.menu-stars {
+  position: absolute; inset: 0;
+  background-image:
+    radial-gradient(1px 1px at 10% 15%, white 0%, transparent 100%),
+    radial-gradient(1px 1px at 30% 50%, white 0%, transparent 100%),
+    radial-gradient(1px 1px at 60% 20%, white 0%, transparent 100%),
+    radial-gradient(1px 1px at 80% 70%, white 0%, transparent 100%),
+    radial-gradient(1px 1px at 50% 80%, rgba(255,255,255,0.5) 0%, transparent 100%),
+    radial-gradient(2px 2px at 90% 40%, white 0%, transparent 100%),
+    radial-gradient(1px 1px at 20% 90%, white 0%, transparent 100%),
+    radial-gradient(1px 1px at 70% 10%, white 0%, transparent 100%);
+  background-size: 400px 400px;
+  animation: twinkle 4s infinite alternate;
 }
 
-function roomCodeExists(code) {
-  return !!rooms[code];
+@keyframes twinkle { from { opacity: 0.7; } to { opacity: 1; } }
+
+.menu-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  z-index: 1;
 }
 
-function generateCode() {
-  let code;
-  do { code = Math.random().toString(36).substring(2, 6).toUpperCase(); }
-  while (roomCodeExists(code));
-  return code;
+.game-title {
+  font-size: 4rem;
+  font-weight: 900;
+  color: #fff;
+  text-shadow: 0 0 30px rgba(197,17,17,0.8), 0 0 60px rgba(197,17,17,0.4);
+  letter-spacing: 6px;
+  animation: pulse-glow 2s ease-in-out infinite;
 }
 
-// ─── Socket.io ────────────────────────────────────────────────────────────────
-
-io.on('connection', (socket) => {
-  console.log('connect', socket.id);
-
-  // ── Create Room ──
-  socket.on('createRoom', ({ name }, callback) => {
-    const code = generateCode();
-    rooms[code] = createGameState();
-    const color = COLORS[0];
-    rooms[code].players[socket.id] = {
-      id: socket.id, name, color, x: 45, y: 50,
-      alive: true, role: null, tasks: [], isHost: true, roomCode: code,
-    };
-    socket.join(code);
-    callback({ code, color });
-    io.to(code).emit('gameState', sanitize(rooms[code], socket.id));
-  });
-
-  // ── Join Room ──
-  socket.on('joinRoom', ({ name, code }, callback) => {
-    const state = rooms[code];
-    if (!state) return callback({ error: 'Room not found' });
-    if (state.phase !== 'lobby') return callback({ error: 'Game already started' });
-    if (Object.keys(state.players).length >= 12) return callback({ error: 'Room full' });
-
-    const usedColors = Object.values(state.players).map(p => p.color);
-    const color = COLORS.find(c => !usedColors.includes(c)) || COLORS[0];
-
-    state.players[socket.id] = {
-      id: socket.id, name, color, x: 45, y: 50,
-      alive: true, role: null, tasks: [], isHost: false, roomCode: code,
-    };
-    socket.join(code);
-    callback({ code, color });
-    io.to(code).emit('gameState', sanitize(state, socket.id));
-  });
-
-  // ── Start Game ──
-  socket.on('startGame', () => {
-    const player = findPlayer(socket.id);
-    if (!player || !player.isHost) return;
-    const state = rooms[player.roomCode];
-    if (Object.keys(state.players).length < 4) return;
-
-    state.phase = 'game';
-    state.deadBodies = [];
-    state.chatMessages = [];
-
-    const impostorIds = pickImpostors(state.players);
-    Object.values(state.players).forEach(p => {
-      p.role = impostorIds.includes(p.id) ? 'impostor' : 'crewmate';
-      p.tasks = p.role === 'crewmate' ? assignTasks(p.id) : [];
-      p.alive = true;
-      const pos = spawnPosition();
-      p.x = pos.x; p.y = pos.y;
-    });
-
-    state.emergencyUsed = {};
-    io.to(player.roomCode).emit('gameState', sanitize(state, null));
-    Object.keys(state.players).forEach(id => {
-      io.to(id).emit('yourRole', { role: state.players[id].role });
-    });
-  });
-
-  // ── Player Move ──
-  socket.on('move', ({ x, y }) => {
-    const player = findPlayer(socket.id);
-    if (!player || !player.alive) return;
-    const state = rooms[player.roomCode];
-    if (state.phase !== 'game') return;
-    player.x = Math.max(0, Math.min(100, x));
-    player.y = Math.max(0, Math.min(100, y));
-    io.to(player.roomCode).emit('playerMoved', { id: socket.id, x: player.x, y: player.y });
-  });
-
-  // ── Complete Task ──
-  socket.on('completeTask', ({ taskId }) => {
-    const player = findPlayer(socket.id);
-    if (!player || !player.alive || player.role !== 'crewmate') return;
-    const state = rooms[player.roomCode];
-    const task = player.tasks.find(t => t.id === taskId);
-    if (task && !task.done) {
-      task.done = true;
-      io.to(player.roomCode).emit('taskCompleted', { playerId: socket.id, taskId });
-
-      const winner = checkVictory(state);
-      if (winner) endGame(state, winner, player.roomCode);
-    }
-  });
-
-  // ── Kill ──
-  socket.on('kill', ({ targetId }) => {
-    const killer = findPlayer(socket.id);
-    if (!killer || !killer.alive || killer.role !== 'impostor') return;
-    const state = rooms[killer.roomCode];
-    if (state.phase !== 'game') return;
-
-    const target = state.players[targetId];
-    if (!target || !target.alive) return;
-
-    const dist = Math.hypot(killer.x - target.x, killer.y - target.y);
-    if (dist > 8) return; // must be close
-
-    target.alive = false;
-    state.deadBodies.push({ x: target.x, y: target.y, color: target.color, id: uuidv4() });
-
-    io.to(killer.roomCode).emit('playerKilled', { targetId, bodies: state.deadBodies });
-
-    const winner = checkVictory(state);
-    if (winner) endGame(state, winner, killer.roomCode);
-  });
-
-  // ── Report Body ──
-  socket.on('reportBody', ({ bodyId }) => {
-    const player = findPlayer(socket.id);
-    if (!player || !player.alive) return;
-    const state = rooms[player.roomCode];
-    if (state.phase !== 'game') return;
-    startMeeting(state, player.roomCode, player.id, `${player.name} a reporté un corps !`);
-  });
-
-  // ── Emergency Meeting ──
-  socket.on('emergencyMeeting', () => {
-    const player = findPlayer(socket.id);
-    if (!player || !player.alive) return;
-    const state = rooms[player.roomCode];
-    if (state.phase !== 'game') return;
-    if (state.emergencyUsed[socket.id]) return;
-    state.emergencyUsed[socket.id] = true;
-    startMeeting(state, player.roomCode, player.id, `${player.name} a appelé une réunion d'urgence !`);
-  });
-
-  // ── Chat ──
-  socket.on('chat', ({ text }) => {
-    const player = findPlayer(socket.id);
-    if (!player || !player.alive) return;
-    const state = rooms[player.roomCode];
-    if (state.phase !== 'meeting') return;
-
-    const msg = { id: uuidv4(), playerId: socket.id, playerName: player.name, color: player.color, text };
-    state.chatMessages.push(msg);
-    io.to(player.roomCode).emit('chatMessage', msg);
-  });
-
-  // ── Vote ──
-  socket.on('vote', ({ targetId }) => {
-    const player = findPlayer(socket.id);
-    if (!player || !player.alive) return;
-    const state = rooms[player.roomCode];
-    if (state.phase !== 'meeting' || state.votes[socket.id]) return;
-
-    state.votes[socket.id] = targetId || 'skip';
-    io.to(player.roomCode).emit('voted', { voterId: socket.id });
-
-    const alivePlayers = Object.values(state.players).filter(p => p.alive);
-    if (Object.keys(state.votes).length >= alivePlayers.length) {
-      resolveVote(state, player.roomCode);
-    }
-  });
-
-  // ── Disconnect ──
-  socket.on('disconnect', () => {
-    const player = findPlayer(socket.id);
-    if (!player) return;
-    const code = player.roomCode;
-    const state = rooms[code];
-    delete state.players[socket.id];
-
-    if (Object.keys(state.players).length === 0) {
-      delete rooms[code];
-      return;
-    }
-
-    // Assign new host if needed
-    if (!Object.values(state.players).some(p => p.isHost)) {
-      Object.values(state.players)[0].isHost = true;
-    }
-
-    io.to(code).emit('playerLeft', { id: socket.id });
-    io.to(code).emit('gameState', sanitize(state, null));
-  });
-});
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function findPlayer(socketId) {
-  for (const state of Object.values(rooms)) {
-    if (state.players[socketId]) return state.players[socketId];
-  }
-  return null;
+@keyframes pulse-glow {
+  0%, 100% { text-shadow: 0 0 30px rgba(197,17,17,0.8), 0 0 60px rgba(197,17,17,0.4); }
+  50% { text-shadow: 0 0 50px rgba(197,17,17,1), 0 0 100px rgba(197,17,17,0.6); }
 }
 
-function startMeeting(state, code, callerId, reason) {
-  state.phase = 'meeting';
-  state.meetingCaller = callerId;
-  state.votes = {};
-  const systemMsg = { id: uuidv4(), playerId: 'system', playerName: 'Système', color: 'white', text: reason };
-  state.chatMessages = [systemMsg];
-  io.to(code).emit('meetingStart', { reason, chatMessages: state.chatMessages });
-  io.to(code).emit('gameState', sanitize(state, null));
+.astronaut-logo { font-size: 5rem; animation: float 3s ease-in-out infinite; }
+@keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-15px)} }
+
+.menu-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 320px;
 }
 
-function resolveVote(state, code) {
-  const tally = {};
-  Object.values(state.votes).forEach(v => { tally[v] = (tally[v] || 0) + 1; });
+.menu-buttons { display: flex; flex-direction: column; gap: 10px; }
 
-  let ejected = null;
-  let maxVotes = 0;
-  let tie = false;
+.join-row { display: flex; gap: 8px; }
 
-  for (const [id, count] of Object.entries(tally)) {
-    if (id === 'skip') continue;
-    if (count > maxVotes) { maxVotes = count; ejected = id; tie = false; }
-    else if (count === maxVotes) { tie = true; }
-  }
+.input {
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: #fff;
+  font-family: 'Nunito', sans-serif;
+  font-size: 1rem;
+  font-weight: 700;
+  outline: none;
+  transition: border-color 0.2s;
+  width: 100%;
+}
+.input:focus { border-color: var(--cyan); }
+.input-code { width: 100px; text-align: center; letter-spacing: 4px; font-size: 1.1rem; flex-shrink: 0; }
 
-  if (tie || !ejected || (tally['skip'] || 0) >= maxVotes) ejected = null;
+.btn {
+  border: none;
+  border-radius: 10px;
+  padding: 12px 20px;
+  font-family: 'Nunito', sans-serif;
+  font-weight: 900;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 1px;
+}
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  if (ejected && state.players[ejected]) {
-    state.players[ejected].alive = false;
-    const role = state.players[ejected].role;
-    io.to(code).emit('playerEjected', { ejectedId: ejected, role });
-  } else {
-    io.to(code).emit('voteSkipped');
-  }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: #e02020; box-shadow: 0 4px 20px rgba(197,17,17,0.5); }
 
-  const winner = checkVictory(state);
-  if (winner) {
-    setTimeout(() => endGame(state, winner, code), 3000);
-  } else {
-    setTimeout(() => {
-      state.phase = 'game';
-      io.to(code).emit('meetingEnd');
-      io.to(code).emit('gameState', sanitize(state, null));
-    }, 3000);
-  }
+.btn-secondary { background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.2); flex-shrink: 0; }
+.btn-secondary:hover { background: rgba(255,255,255,0.2); }
+
+.menu-hint { color: var(--text-dim); font-size: 0.8rem; }
+
+/* ══════════════════════════════════
+   LOBBY
+══════════════════════════════════ */
+.lobby-screen { background: radial-gradient(ellipse at center, #0d1b2a 0%, #020410 100%); }
+
+.lobby-container {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 30px 40px;
+  width: 500px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  backdrop-filter: blur(10px);
 }
 
-function endGame(state, winner, code) {
-  state.phase = 'victory';
-  state.winner = winner;
-  io.to(code).emit('gameOver', { winner, players: state.players });
+.lobby-title { font-size: 1.8rem; font-weight: 900; }
+
+.room-code {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 24px;
+  font-size: 1rem;
+}
+.code-text { font-family: 'Share Tech Mono', monospace; font-size: 1.6rem; color: var(--cyan); letter-spacing: 6px; }
+
+.player-list { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+
+.player-slot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255,255,255,0.05);
+  border: 2px solid var(--color, rgba(255,255,255,0.1));
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.player-slot.empty { opacity: 0.3; border-style: dashed; }
+.player-icon { font-size: 1.4rem; }
+.player-slot-name { font-weight: 700; }
+
+.lobby-hint { color: var(--text-dim); font-size: 0.9rem; text-align: center; }
+.btn-start { background: var(--green); color: #fff; font-size: 1.1rem; padding: 14px 40px; margin-top: 4px; }
+.btn-start:hover:not(:disabled) { background: #1a9e3f; box-shadow: 0 4px 20px rgba(17,127,45,0.5); }
+
+/* ══════════════════════════════════
+   GAME
+══════════════════════════════════ */
+.game-screen {
+  position: relative;
+  flex-direction: column;
+  background: #000;
+  overflow: hidden;
 }
 
-function sanitize(state, requesterId) {
-  const players = {};
-  Object.values(state.players).forEach(p => {
-    players[p.id] = {
-      id: p.id, name: p.name, color: p.color, x: p.x, y: p.y,
-      alive: p.alive, isHost: p.isHost,
-      taskCount: p.tasks.length,
-      tasksDone: p.tasks.filter(t => t.done).length,
-    };
-  });
-  return {
-    phase: state.phase,
-    players,
-    deadBodies: state.deadBodies,
-    chatMessages: state.chatMessages,
-    winner: state.winner,
-  };
+/* HUD */
+.hud-top {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(4px);
 }
 
-// ─── Health check ─────────────────────────────────────────────────────────────
-app.get('/', (_, res) => res.json({ status: 'ok', rooms: Object.keys(rooms).length }));
+.role-badge {
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  font-weight: 900;
+  letter-spacing: 1px;
+  flex-shrink: 0;
+}
 
-const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+.task-bar-container { flex: 1; }
+.task-bar-label { font-size: 0.7rem; color: var(--text-dim); margin-bottom: 3px; }
+.task-bar-outer { height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden; }
+.task-bar-inner { height: 100%; background: linear-gradient(90deg, var(--green), var(--cyan)); border-radius: 5px; transition: width 0.5s ease; }
+
+/* MAP */
+.game-map {
+  position: absolute;
+  top: 50px; bottom: 50px; left: 200px; right: 0;
+  background:
+    linear-gradient(rgba(20,40,80,0.95), rgba(10,20,50,0.95)),
+    repeating-linear-gradient(0deg, transparent, transparent 40px, rgba(255,255,255,0.01) 40px, rgba(255,255,255,0.01) 41px),
+    repeating-linear-gradient(90deg, transparent, transparent 40px, rgba(255,255,255,0.01) 40px, rgba(255,255,255,0.01) 41px);
+  border: 2px solid var(--ship-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* Rooms */
+.room {
+  position: absolute;
+  background: rgba(30,60,100,0.4);
+  border: 1px solid rgba(42,90,138,0.6);
+  border-radius: 6px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 4px;
+}
+.room-label {
+  font-size: 0.6rem;
+  color: rgba(100,180,255,0.5);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  pointer-events: none;
+}
+
+/* Task spots */
+.task-spot {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: 1rem;
+  cursor: pointer;
+  animation: task-pulse 1.5s ease-in-out infinite;
+  z-index: 2;
+}
+.task-spot.done { opacity: 0.4; animation: none; }
+@keyframes task-pulse { 0%,100%{transform:translate(-50%,-50%) scale(1)} 50%{transform:translate(-50%,-50%) scale(1.3)} }
+
+/* Dead body */
+.dead-body {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: 1.4rem;
+  z-index: 3;
+  filter: drop-shadow(0 0 8px rgba(197,17,17,0.8));
+  animation: dead-pulse 2s ease-in-out infinite;
+}
+@keyframes dead-pulse { 0%,100%{filter:drop-shadow(0 0 8px rgba(197,17,17,0.8))} 50%{filter:drop-shadow(0 0 16px rgba(197,17,17,1))} }
+
+/* Players */
+.player {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  transition: left 0.05s linear, top 0.05s linear;
+}
+.player.dead { opacity: 0.35; filter: grayscale(0.5); }
+.player.me svg { filter: drop-shadow(0 0 4px white); }
+.player-name-tag {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 3px #000;
+  white-space: nowrap;
+  background: rgba(0,0,0,0.5);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+/* Emergency button */
+.emergency-btn {
+  position: absolute;
+  bottom: 8%; left: 50%;
+  transform: translateX(-50%);
+  width: 60px; height: 60px;
+  background: radial-gradient(circle, #ff3333, #aa0000);
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  cursor: pointer;
+  border: 3px solid #ff6666;
+  box-shadow: 0 0 20px rgba(255,0,0,0.6);
+  z-index: 6;
+  transition: transform 0.1s;
+}
+.emergency-btn:hover { transform: translateX(-50%) scale(1.1); }
+.emergency-btn:active { transform: translateX(-50%) scale(0.95); }
+.emergency-label { font-size: 0.45rem; color: #ffcccc; font-weight: 900; letter-spacing: 1px; }
+
+/* Sidebar */
+.task-sidebar {
+  position: absolute;
+  top: 50px; bottom: 50px; left: 0;
+  width: 200px;
+  background: rgba(0,0,0,0.7);
+  border-right: 1px solid var(--border);
+  padding: 16px 12px;
+  overflow-y: auto;
+}
+.task-sidebar-title {
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--cyan);
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+.task-item {
+  font-size: 0.75rem;
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  transition: all 0.2s;
+}
+.task-item.done { color: var(--text-dim); text-decoration: line-through; background: rgba(17,127,45,0.1); }
+.impostor-hint { font-size: 0.75rem; color: #ff8888; line-height: 1.5; }
+
+/* Action bar */
+.action-bar {
+  position: absolute;
+  bottom: 0; left: 200px; right: 0;
+  height: 50px;
+  background: rgba(0,0,0,0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 20px;
+}
+.btn-report { background: #ff6600; color: #fff; font-size: 0.85rem; padding: 8px 18px; }
+.btn-report:hover { background: #ff8822; }
+.btn-task { background: #1144aa; color: #fff; font-size: 0.85rem; padding: 8px 18px; }
+.btn-task:hover { background: #2255cc; }
+.btn-kill { background: var(--accent); color: #fff; font-size: 0.85rem; padding: 8px 18px; }
+.btn-kill:hover:not(.disabled) { background: #e02020; }
+.btn-kill.disabled { opacity: 0.4; }
+
+.ghost-overlay {
+  position: absolute;
+  top: 50px; left: 0; right: 0;
+  background: rgba(100,100,255,0.1);
+  text-align: center;
+  padding: 6px;
+  font-size: 0.85rem;
+  color: rgba(150,150,255,0.8);
+  backdrop-filter: blur(2px);
+}
+
+.notification {
+  position: absolute;
+  top: 80px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.85);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 24px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  z-index: 20;
+  animation: fade-in-out 3s ease forwards;
+  white-space: nowrap;
+}
+@keyframes fade-in-out {
+  0%{opacity:0;transform:translateX(-50%) translateY(-10px)}
+  15%,85%{opacity:1;transform:translateX(-50%) translateY(0)}
+  100%{opacity:0}
+}
+
+.controls-hint {
+  position: absolute;
+  bottom: 0; left: 0;
+  width: 200px;
+  height: 50px;
+  background: rgba(0,0,0,0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  padding: 0 8px;
+  text-align: center;
+}
+
+/* ══════════════════════════════════
+   TASK MODAL
+══════════════════════════════════ */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(4px);
+}
+.task-modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  width: 400px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.task-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+.task-modal-title { font-size: 1.1rem; font-weight: 900; }
+.modal-close { background: none; border: none; color: var(--text-dim); font-size: 1.2rem; cursor: pointer; }
+.modal-close:hover { color: var(--text); }
+
+/* Download task */
+.task-download { text-align: center; padding: 20px 0; }
+.download-bar-outer { height: 20px; background: rgba(255,255,255,0.1); border-radius: 10px; overflow: hidden; margin: 16px 0 8px; }
+.download-bar-inner { height: 100%; background: linear-gradient(90deg, #1144aa, var(--cyan)); transition: width 0.1s; }
+.download-bar-inner.fuel-bar { background: linear-gradient(90deg, #ff6600, #ffaa00); }
+.download-pct { font-family: 'Share Tech Mono', monospace; font-size: 1.4rem; color: var(--cyan); margin-bottom: 8px; }
+
+/* Swipe task */
+.task-swipe { text-align: center; padding: 20px 0; }
+.swipe-track {
+  height: 60px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  position: relative;
+  margin: 16px 0;
+  overflow: hidden;
+}
+.swipe-card {
+  position: absolute;
+  top: 10px; width: 40px; height: 40px;
+  background: linear-gradient(135deg, #gold, #ffdd44);
+  background: linear-gradient(135deg, #ffcc00, #ff8800);
+  border-radius: 6px;
+  transform: translateX(-50%);
+  transition: left 0.02s linear;
+}
+.swipe-card.success { background: var(--green); }
+
+/* Wire task */
+.wire-task { padding: 20px 0; text-align: center; }
+.wire-columns { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding: 0 20px; gap: 40px; }
+.wire-col { display: flex; flex-direction: column; gap: 16px; }
+.wire-node {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 3px solid rgba(255,255,255,0.3);
+  transition: all 0.15s;
+  position: relative;
+}
+.wire-node:hover { transform: scale(1.15); border-color: white; }
+.wire-node.selected { border-color: white; box-shadow: 0 0 12px rgba(255,255,255,0.6); transform: scale(1.15); }
+.wire-node.done { opacity: 0.4; cursor: default; transform: none; }
+
+/* Asteroid task */
+.asteroid-task { padding: 20px 0; text-align: center; }
+.asteroid-field { position: relative; height: 200px; background: rgba(0,0,0,0.3); border-radius: 10px; margin-top: 16px; border: 1px solid var(--border); }
+.asteroid { position: absolute; font-size: 2rem; cursor: pointer; transform: translate(-50%, -50%); transition: transform 0.1s; user-select: none; }
+.asteroid:hover { transform: translate(-50%, -50%) scale(1.2); }
+.asteroid:active { transform: translate(-50%, -50%) scale(0.8); }
+
+/* ══════════════════════════════════
+   MEETING
+══════════════════════════════════ */
+.meeting-screen {
+  background: radial-gradient(ellipse at center, #1a0000 0%, #000 100%);
+}
+.meeting-container {
+  width: 95%;
+  max-width: 1100px;
+  height: 90vh;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.meeting-header { text-align: center; }
+.meeting-title { font-size: 1.8rem; font-weight: 900; color: var(--accent); text-shadow: 0 0 20px rgba(197,17,17,0.6); }
+.meeting-reason { color: var(--text-dim); font-size: 0.9rem; margin-top: 4px; }
+
+.meeting-body {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Chat */
+.meeting-chat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chat-msg {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  background: rgba(255,255,255,0.04);
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+.chat-msg.system { background: rgba(197,17,17,0.1); justify-content: center; font-style: italic; }
+.chat-author { font-weight: 900; flex-shrink: 0; }
+.chat-text { color: var(--text); }
+
+.quick-chat {
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  background: rgba(0,0,0,0.3);
+  max-height: 140px;
+  overflow-y: auto;
+}
+.quick-chat-btn {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 10px;
+  color: var(--text);
+  font-family: 'Nunito', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.quick-chat-btn:hover { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.3); }
+
+/* Vote */
+.vote-panel {
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.vote-title { font-weight: 900; font-size: 0.9rem; color: var(--text-dim); letter-spacing: 1px; text-transform: uppercase; }
+.vote-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  flex: 1;
+  overflow-y: auto;
+}
+.vote-card {
+  background: rgba(255,255,255,0.05);
+  border: 2px solid var(--pcolor, rgba(255,255,255,0.1));
+  border-radius: 10px;
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.vote-card:hover:not(.voted):not(.self) { background: rgba(255,255,255,0.12); transform: scale(1.03); }
+.vote-card.self { opacity: 0.5; cursor: default; }
+.vote-card.voted { cursor: default; }
+.vote-astronaut { font-size: 1.8rem; }
+.vote-name { font-size: 0.7rem; font-weight: 700; text-align: center; }
+
+.btn-skip { background: rgba(255,255,255,0.08); color: var(--text); font-size: 0.85rem; padding: 8px; border: 1px solid var(--border); }
+.btn-skip:hover { background: rgba(255,255,255,0.15); }
+.voted-notice { text-align: center; color: var(--green); font-weight: 700; padding: 8px; }
+
+/* Ejected */
+.ejected-panel {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ejected-info { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.ejected-astronaut { font-size: 5rem; filter: drop-shadow(0 0 20px var(--color)); }
+.ejected-info p { font-size: 1.2rem; }
+.role-reveal { font-size: 1rem; color: var(--text-dim); }
+
+/* ══════════════════════════════════
+   VICTORY
+══════════════════════════════════ */
+.victory-screen {
+  background: radial-gradient(ellipse at center, #0d1b2a 0%, #000 100%);
+}
+.victory-container {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+.victory-icon { font-size: 5rem; animation: float 2s ease-in-out infinite; }
+.victory-title { font-size: 2.5rem; font-weight: 900; }
+.victory-sub { font-size: 1.2rem; color: var(--text-dim); }
+.victory-roles { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 400px; }
+.victory-player {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: rgba(255,255,255,0.03); }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
