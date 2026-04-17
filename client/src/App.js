@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import './style/App.css';
 
-const SERVER_URL = process.env.REACT_APP_SERVER_URL || 'http://localhost:3001';
+const SERVER_URL = process.env.REACT_APP_SERVER_URL || 'https://parmis-nous.onrender.com';
 
 const PLAYER_COLORS = {
   red: '#c51111', blue: '#132ed1', green: '#117f2d', purple: '#6b2fbb',
