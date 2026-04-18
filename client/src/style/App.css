@@ -717,3 +717,26 @@ body {
   border-color: var(--cyan);
   box-shadow: 0 0 12px rgba(56,254,220,0.5);
 }
+
+/* ── LOBBY - Lien d'invitation ── */
+.room-code-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.btn-copy {
+  background: rgba(56, 254, 220, 0.15);
+  border: 1px solid var(--cyan);
+  color: var(--cyan);
+  font-size: 0.85rem;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+  font-family: 'Nunito', sans-serif;
+  font-weight: 700;
+}
+.btn-copy:hover { background: rgba(56, 254, 220, 0.28); }
