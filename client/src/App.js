@@ -58,7 +58,7 @@ const TASK_SPOTS = [
 ];
 
 export default function App() {
-  const [screen, setScreen] = useState('menu'); // menu | lobby | game | meeting | victory
+  const [screen, setScreen] = useState('menu');
   const [playerName, setPlayerName] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [joinCode, setJoinCode] = useState('');
@@ -85,6 +85,27 @@ export default function App() {
   const myPosRef = useRef({ x: 45, y: 50 });
   const keysRef = useRef({});
   const moveIntervalRef = useRef(null);
+  const screenRef = useRef(screen);
+  screenRef.current = screen;
+
+  // ── Lire le code de salle depuis l'URL au démarrage ──
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const codeFromUrl = params.get('room');
+    if (codeFromUrl) {
+      setJoinCode(codeFromUrl.toUpperCase());
+    }
+  }, []);
+
+  // ── Mettre à jour l'URL quand on rejoint une salle ──
+  const updateUrl = (code) => {
+    if (code) {
+      const newUrl = `${window.location.pathname}?room=${code}`;
+      window.history.replaceState(null, '', newUrl);
+    } else {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  };
 
   // ── Init Socket ──
   useEffect(() => {
@@ -93,11 +114,11 @@ export default function App() {
 
     socket.on('gameState', (state) => {
       setGameState(state);
-      if (state.phase === 'meeting' && screen !== 'meeting') {
+      if (state.phase === 'meeting' && screenRef.current !== 'meeting') {
         setScreen('meeting');
         setChatMessages(state.chatMessages || []);
       }
-      if (state.phase === 'game' && screen === 'meeting') {
+      if (state.phase === 'game' && screenRef.current === 'meeting') {
         setScreen('game');
         setEjectedInfo(null);
       }
@@ -111,8 +132,7 @@ export default function App() {
     socket.on('playerMoved', ({ id, x, y }) => {
       setGameState(prev => {
         if (!prev || !prev.players[id]) return prev;
-        const updated = { ...prev, players: { ...prev.players, [id]: { ...prev.players[id], x, y } } };
-        return updated;
+        return { ...prev, players: { ...prev.players, [id]: { ...prev.players[id], x, y } } };
       });
     });
 
@@ -171,7 +191,7 @@ export default function App() {
       });
     });
 
-    socket.on('gameOver', ({ winner: w, players }) => {
+    socket.on('gameOver', ({ winner: w }) => {
       setWinner(w);
       setScreen('victory');
     });
@@ -222,7 +242,6 @@ export default function App() {
     };
   }, [screen, myId, myTasks]);
 
-  // Kill cooldown
   useEffect(() => {
     if (screen !== 'game') return;
     setKillCooldown(30);
@@ -234,13 +253,10 @@ export default function App() {
 
   const checkProximity = useCallback((x, y) => {
     if (!gameState) return;
-    // Check tasks
     const task = myTasks.find(t => !t.done && Math.hypot(x - t.x, y - t.y) < 6);
     setNearbyTask(task || null);
-    // Check bodies
     const body = gameState?.deadBodies?.find(b => Math.hypot(x - b.x, y - b.y) < 6);
     setNearbyBody(body || null);
-    // Check players (for kill)
     const otherPlayer = Object.values(gameState?.players || {}).find(p =>
       p.id !== myId && p.alive && Math.hypot(x - p.x, y - p.y) < 8
     );
@@ -259,17 +275,20 @@ export default function App() {
       setRoomCode(code);
       setMyId(socketRef.current.id);
       setMyColor(color);
+      updateUrl(code);
       setScreen('lobby');
     });
   };
 
-  const joinRoom = () => {
-    if (!playerName.trim() || !joinCode.trim()) return;
-    socketRef.current?.emit('joinRoom', { name: playerName, code: joinCode.toUpperCase() }, (res) => {
+  const joinRoom = (codeOverride) => {
+    const code = (codeOverride || joinCode).trim().toUpperCase();
+    if (!playerName.trim() || !code) return;
+    socketRef.current?.emit('joinRoom', { name: playerName, code }, (res) => {
       if (res.error) return showNotif('❌ ' + res.error);
-      setRoomCode(joinCode.toUpperCase());
+      setRoomCode(code);
       setMyId(socketRef.current.id);
       setMyColor(res.color);
+      updateUrl(code);
       setScreen('lobby');
     });
   };
@@ -321,9 +340,9 @@ export default function App() {
     setRoomCode('');
     setJoinCode('');
     setActiveTask(null);
+    updateUrl(null);
   };
 
-  // ── Task progress ──
   const taskProgress = myRole === 'crewmate'
     ? myTasks.filter(t => t.done).length / Math.max(myTasks.length, 1)
     : 0;
@@ -332,11 +351,30 @@ export default function App() {
   const isAlive = myPlayer?.alive ?? true;
   const isHost = myPlayer?.isHost ?? false;
 
-  // ── Render ──
   return (
     <div className="app">
-      {screen === 'menu' && <MenuScreen playerName={playerName} setPlayerName={setPlayerName} joinCode={joinCode} setJoinCode={setJoinCode} createRoom={createRoom} joinRoom={joinRoom} maxPlayers={maxPlayers} setMaxPlayers={setMaxPlayers} />}
-      {screen === 'lobby' && <LobbyScreen roomCode={roomCode} players={gameState?.players || {}} isHost={isHost} startGame={startGame} myId={myId} />}
+      {screen === 'menu' && (
+        <MenuScreen
+          playerName={playerName}
+          setPlayerName={setPlayerName}
+          joinCode={joinCode}
+          setJoinCode={setJoinCode}
+          createRoom={createRoom}
+          joinRoom={joinRoom}
+          maxPlayers={maxPlayers}
+          setMaxPlayers={setMaxPlayers}
+        />
+      )}
+      {screen === 'lobby' && (
+        <LobbyScreen
+          roomCode={roomCode}
+          players={gameState?.players || {}}
+          isHost={isHost}
+          startGame={startGame}
+          myId={myId}
+          maxPlayers={gameState?.maxPlayers || maxPlayers}
+        />
+      )}
       {screen === 'game' && gameState && (
         <GameScreen
           gameState={gameState}
@@ -374,7 +412,12 @@ export default function App() {
         />
       )}
       {screen === 'victory' && (
-        <VictoryScreen winner={winner} players={gameState?.players || {}} myRole={myRole} onPlayAgain={resetGame} />
+        <VictoryScreen
+          winner={winner}
+          players={gameState?.players || {}}
+          myRole={myRole}
+          onPlayAgain={resetGame}
+        />
       )}
     </div>
   );
@@ -397,6 +440,7 @@ function MenuScreen({ playerName, setPlayerName, joinCode, setJoinCode, createRo
             value={playerName}
             onChange={e => setPlayerName(e.target.value)}
             maxLength={12}
+            onKeyDown={e => e.key === 'Enter' && (joinCode ? joinRoom() : createRoom())}
           />
           <div className="menu-buttons">
             <div className="size-selector">
@@ -419,8 +463,9 @@ function MenuScreen({ playerName, setPlayerName, joinCode, setJoinCode, createRo
                 value={joinCode}
                 onChange={e => setJoinCode(e.target.value.toUpperCase())}
                 maxLength={4}
+                onKeyDown={e => e.key === 'Enter' && joinRoom()}
               />
-              <button className="btn btn-secondary" onClick={joinRoom}>Rejoindre</button>
+              <button className="btn btn-secondary" onClick={() => joinRoom()}>Rejoindre</button>
             </div>
           </div>
         </div>
@@ -433,15 +478,43 @@ function MenuScreen({ playerName, setPlayerName, joinCode, setJoinCode, createRo
 // ══════════════════════════════════════════════════════════════════════════════
 // LOBBY SCREEN
 // ══════════════════════════════════════════════════════════════════════════════
-function LobbyScreen({ roomCode, players, isHost, startGame, myId }) {
+function LobbyScreen({ roomCode, players, isHost, startGame, myId, maxPlayers }) {
+  const [copied, setCopied] = useState(false);
   const playerList = Object.values(players);
+  const playerCount = playerList.length;
+
+  const inviteUrl = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(inviteUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  // Slots vides = maxPlayers - joueurs présents (max 8 affichés pour pas surcharger)
+  const emptySlots = Math.max(0, Math.min(maxPlayers, 8) - playerCount);
+
+  const lobbyHint = () => {
+    if (playerCount === 1) return '🧪 Mode solo — vous serez imposteur !';
+    if (playerCount < 3) return `${playerCount} joueur${playerCount > 1 ? 's' : ''} — ajoutez des amis pour plus de fun !`;
+    return `${playerCount} joueurs — prêt à jouer !`;
+  };
+
   return (
     <div className="screen lobby-screen">
       <div className="lobby-container">
         <h2 className="lobby-title">Salle d'attente</h2>
-        <div className="room-code">
-          Code : <span className="code-text">{roomCode}</span>
+
+        <div className="room-code-block">
+          <div className="room-code">
+            Code : <span className="code-text">{roomCode}</span>
+          </div>
+          <button className="btn btn-copy" onClick={copyLink}>
+            {copied ? '✅ Copié !' : '🔗 Copier le lien d\'invitation'}
+          </button>
         </div>
+
         <div className="player-list">
           {playerList.map(p => (
             <div key={p.id} className="player-slot" style={{ '--color': PLAYER_COLORS[p.color] }}>
@@ -454,20 +527,23 @@ function LobbyScreen({ roomCode, players, isHost, startGame, myId }) {
                 <rect x="8" y="35" width="6" height="5" rx="2" fill={PLAYER_COLORS[p.color]} stroke="rgba(0,0,0,0.3)" strokeWidth="1"/>
                 <rect x="16" y="35" width="6" height="5" rx="2" fill={PLAYER_COLORS[p.color]} stroke="rgba(0,0,0,0.3)" strokeWidth="1"/>
               </svg>
-              <span className="player-slot-name">{p.name}{p.id === myId ? ' (Moi)' : ''}{p.isHost ? ' 👑' : ''}</span>
+              <span className="player-slot-name">
+                {p.name}{p.id === myId ? ' (Moi)' : ''}{p.isHost ? ' 👑' : ''}
+              </span>
             </div>
           ))}
-          {Array(Math.max(0, 4 - playerList.length)).fill(0).map((_, i) => (
+          {Array(emptySlots).fill(0).map((_, i) => (
             <div key={i} className="player-slot empty">
               <span className="player-icon">❓</span>
               <span className="player-slot-name">En attente...</span>
             </div>
           ))}
         </div>
+
         {isHost ? (
           <div>
-            <p className="lobby-hint">{playerList.length < 1 ? 'Entrez votre pseudo !' : playerList.length === 1 ? '🧪 Mode solo activé — prêt à tester !' : 'Prêt à jouer !'}</p>
-            <button className="btn btn-start" onClick={startGame} disabled={playerList.length < 1}>
+            <p className="lobby-hint">{lobbyHint()}</p>
+            <button className="btn btn-start" onClick={startGame}>
               Démarrer la partie
             </button>
           </div>
@@ -487,16 +563,12 @@ function GameScreen({
   nearbyTask, nearbyBody, nearbyPlayer, killCooldown, isAlive, activeTask,
   notification, onKill, onReport, onTaskInteract, onTaskComplete, onEmergency, onCloseTask, gameAreaRef
 }) {
-  const me = gameState.players[myId];
-  const totalTasks = Object.values(gameState.players)
-    .reduce((sum, p) => sum + (p.tasksDone || 0), 0);
-  const maxTasks = Object.values(gameState.players)
-    .reduce((sum, p) => sum + (p.taskCount || 0), 0);
+  const totalTasks = Object.values(gameState.players).reduce((sum, p) => sum + (p.tasksDone || 0), 0);
+  const maxTasks = Object.values(gameState.players).reduce((sum, p) => sum + (p.taskCount || 0), 0);
   const overallProgress = maxTasks > 0 ? totalTasks / maxTasks : 0;
 
   return (
     <div className="screen game-screen">
-      {/* HUD */}
       <div className="hud-top">
         <div className="role-badge" style={{ background: myRole === 'impostor' ? '#c51111' : '#117f2d' }}>
           {myRole === 'impostor' ? '🔪 IMPOSTEUR' : '🛸 ÉQUIPAGE'}
@@ -509,16 +581,13 @@ function GameScreen({
         </div>
       </div>
 
-      {/* Map */}
       <div className="game-map" ref={gameAreaRef}>
-        {/* Rooms */}
         {SHIP_ROOMS.map(room => (
           <div key={room.id} className="room" style={{ left: `${room.x}%`, top: `${room.y}%`, width: `${room.w}%`, height: `${room.h}%` }}>
             <span className="room-label">{room.name}</span>
           </div>
         ))}
 
-        {/* Task spots */}
         {myRole === 'crewmate' && myTasks.map(task => (
           <div
             key={task.id}
@@ -530,14 +599,12 @@ function GameScreen({
           </div>
         ))}
 
-        {/* Dead bodies */}
         {gameState.deadBodies?.map(body => (
           <div key={body.id} className="dead-body" style={{ left: `${body.x}%`, top: `${body.y}%`, color: PLAYER_COLORS[body.color] }}>
             💀
           </div>
         ))}
 
-        {/* Players */}
         {Object.values(gameState.players).map(p => (
           <div
             key={p.id}
@@ -545,33 +612,23 @@ function GameScreen({
             style={{ left: `${p.x}%`, top: `${p.y}%`, '--pcolor': PLAYER_COLORS[p.color] }}
           >
             <svg width="32" height="40" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg">
-              {/* Backpack */}
               <rect x="22" y="18" width="8" height="12" rx="3" fill={PLAYER_COLORS[p.color]} stroke="rgba(0,0,0,0.4)" strokeWidth="1.5"/>
-              {/* Body */}
               <ellipse cx="15" cy="26" rx="13" ry="12" fill={PLAYER_COLORS[p.color]} stroke="rgba(0,0,0,0.4)" strokeWidth="1.5"/>
-              {/* Head */}
               <ellipse cx="15" cy="14" rx="11" ry="12" fill={PLAYER_COLORS[p.color]} stroke="rgba(0,0,0,0.4)" strokeWidth="1.5"/>
-              {/* Visor */}
               <ellipse cx="18" cy="12" rx="7" ry="5" fill="rgba(100,210,255,0.9)" stroke="rgba(80,180,230,0.6)" strokeWidth="1"/>
-              {/* Visor shine */}
               <ellipse cx="15" cy="10" rx="3" ry="2" fill="rgba(255,255,255,0.5)"/>
-              {/* Left leg */}
               <rect x="8" y="35" width="6" height="5" rx="2" fill={PLAYER_COLORS[p.color]} stroke="rgba(0,0,0,0.4)" strokeWidth="1"/>
-              {/* Right leg */}
               <rect x="16" y="35" width="6" height="5" rx="2" fill={PLAYER_COLORS[p.color]} stroke="rgba(0,0,0,0.4)" strokeWidth="1"/>
-              {/* Dead X eyes */}
               {!p.alive && <>
                 <line x1="13" y1="10" x2="17" y2="14" stroke="red" strokeWidth="2"/>
                 <line x1="17" y1="10" x2="13" y2="14" stroke="red" strokeWidth="2"/>
               </>}
-              {/* Host crown */}
               {p.isHost && <text x="8" y="5" fontSize="10">👑</text>}
             </svg>
             <div className="player-name-tag">{p.name}{!p.alive ? ' 💀' : ''}</div>
           </div>
         ))}
 
-        {/* Emergency button */}
         {isAlive && (
           <div className="emergency-btn" onClick={onEmergency} title="Réunion d'urgence">
             🚨
@@ -580,7 +637,6 @@ function GameScreen({
         )}
       </div>
 
-      {/* Task list sidebar */}
       <div className="task-sidebar">
         <div className="task-sidebar-title">Mes Tâches</div>
         {myRole === 'crewmate' ? myTasks.map(t => (
@@ -592,7 +648,6 @@ function GameScreen({
         )}
       </div>
 
-      {/* Action buttons */}
       {isAlive && (
         <div className="action-bar">
           {nearbyBody && (
@@ -613,20 +668,16 @@ function GameScreen({
         </div>
       )}
 
-      {/* Ghost overlay */}
       {!isAlive && (
         <div className="ghost-overlay">👻 Vous êtes mort - continuez vos tâches !</div>
       )}
 
-      {/* Notification */}
       {notification && <div className="notification">{notification}</div>}
 
-      {/* Task modal */}
       {activeTask && (
         <TaskModal task={activeTask} onComplete={onTaskComplete} onClose={onCloseTask} />
       )}
 
-      {/* Controls hint */}
       <div className="controls-hint">ZQSD / ↑↓←→ pour se déplacer</div>
     </div>
   );
@@ -636,12 +687,11 @@ function GameScreen({
 // TASK MODAL
 // ══════════════════════════════════════════════════════════════════════════════
 function TaskModal({ task, onComplete, onClose }) {
-  const [progress, setProgress] = useState(0);
-  const [wireState, setWireState] = useState(null);
   const [swipePos, setSwipePos] = useState(0);
   const [swiping, setSwiping] = useState(false);
   const [swipeSuccess, setSwipeSuccess] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [wireState, setWireState] = useState(null);
   const intervalRef = useRef(null);
 
   useEffect(() => {
@@ -780,7 +830,6 @@ function AsteroidTask({ onComplete }) {
   const [asteroids, setAsteroids] = useState(() =>
     Array(6).fill(0).map((_, i) => ({ id: i, x: 20 + i * 12, y: 20 + Math.random() * 60, destroyed: false }))
   );
-  const [shots, setShots] = useState(0);
 
   const shoot = (id) => {
     setAsteroids(prev => {
@@ -840,13 +889,12 @@ function MeetingScreen({ players, myId, chatMessages, ejectedInfo, reason, onCha
               <div className="ejected-info">
                 <div className="ejected-astronaut" style={{ '--color': PLAYER_COLORS[ejectedInfo.color] }}>🧑‍🚀</div>
                 <p><strong>{ejectedInfo.name}</strong> a été éjecté dans l'espace !</p>
-                <p className="role-reveal">C'était {ejectedInfo.role === 'impostor' ? '🔪 un Imposteur' : '🛸 un membre de l\'équipage'}</p>
+                <p className="role-reveal">C'était {ejectedInfo.role === 'impostor' ? '🔪 un Imposteur' : "🛸 un membre de l'équipage"}</p>
               </div>
             )}
           </div>
         ) : (
           <div className="meeting-body">
-            {/* Chat */}
             <div className="meeting-chat">
               <div className="chat-messages" ref={chatRef}>
                 {chatMessages.map(msg => (
@@ -871,7 +919,6 @@ function MeetingScreen({ players, myId, chatMessages, ejectedInfo, reason, onCha
               )}
             </div>
 
-            {/* Vote */}
             <div className="vote-panel">
               <div className="vote-title">Voter pour éjecter :</div>
               <div className="vote-grid">
@@ -916,7 +963,7 @@ function VictoryScreen({ winner, players, myRole, onPlayAgain }) {
     <div className="screen victory-screen">
       <div className="victory-container">
         <div className="victory-icon">{winner === 'crewmate' ? '🛸' : '🔪'}</div>
-        <h2 className="victory-title">{winner === 'crewmate' ? 'Victoire de l\'Équipage !' : 'Victoire des Imposteurs !'}</h2>
+        <h2 className="victory-title">{winner === 'crewmate' ? "Victoire de l'Équipage !" : 'Victoire des Imposteurs !'}</h2>
         <p className="victory-sub">{isWin ? '🎉 Vous avez gagné !' : '😢 Vous avez perdu...'}</p>
         <div className="victory-roles">
           {Object.values(players).map(p => (
