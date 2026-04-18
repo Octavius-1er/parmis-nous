@@ -112,6 +112,14 @@ export default function App() {
     const socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
     socketRef.current = socket;
 
+    socket.on('connect', () => {
+      setMyId(socket.id);
+    });
+
+    socket.on('reconnect', () => {
+      setMyId(socket.id);
+    });
+
     socket.on('gameState', (state) => {
       setGameState(state);
       if (state.phase === 'meeting' && screenRef.current !== 'meeting') {
@@ -349,7 +357,7 @@ export default function App() {
 
   const myPlayer = gameState?.players?.[myId];
   const isAlive = myPlayer?.alive ?? true;
-  const isHost = myPlayer?.isHost ?? false;
+  const isHost = Object.values(gameState?.players || {}).find(p => p.id === myId)?.isHost ?? false;
 
   return (
     <div className="app">
