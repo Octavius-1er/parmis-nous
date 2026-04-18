@@ -52,23 +52,31 @@ function broadcastGameState(room) {
 }
 
 function checkWinCondition(room) {
-  const alivePlayers = Object.values(room.players).filter(p => p.alive);
+  const allPlayers = Object.values(room.players);
+  const alivePlayers = allPlayers.filter(p => p.alive);
   const aliveImpostors = alivePlayers.filter(p => p.role === 'impostor');
   const aliveCrewmates = alivePlayers.filter(p => p.role === 'crewmate');
+  const totalCrewmates = allPlayers.filter(p => p.role === 'crewmate');
+
+  // Mode solo (pas de crewmates) : on laisse jouer, pas de condition de victoire imposteur
+  if (totalCrewmates.length === 0) {
+    // Check task win uniquement (l'imposteur explore librement)
+    return false;
+  }
 
   if (aliveImpostors.length === 0) {
     endGame(room, 'crewmate');
     return true;
   }
-  if (aliveImpostors.length >= aliveCrewmates.length) {
+  // Les imposteurs gagnent seulement s'il reste des crewmates à égaler
+  if (aliveCrewmates.length > 0 && aliveImpostors.length >= aliveCrewmates.length) {
     endGame(room, 'impostor');
     return true;
   }
 
   // Check task win
-  const allCrewmates = Object.values(room.players).filter(p => p.role === 'crewmate');
-  const totalTasks = allCrewmates.reduce((s, p) => s + (p.taskCount || 0), 0);
-  const doneTasks = allCrewmates.reduce((s, p) => s + (p.tasksDone || 0), 0);
+  const totalTasks = totalCrewmates.reduce((s, p) => s + (p.taskCount || 0), 0);
+  const doneTasks = totalCrewmates.reduce((s, p) => s + (p.tasksDone || 0), 0);
   if (totalTasks > 0 && doneTasks >= totalTasks) {
     endGame(room, 'crewmate');
     return true;
