@@ -114,10 +114,12 @@ export default function App() {
 
     socket.on('connect', () => {
       setMyId(socket.id);
-    });
-
-    socket.on('reconnect', () => {
-      setMyId(socket.id);
+      // Si on a déjà un roomCode (reconnexion), on se réinscrit dans la salle
+      const storedCode = sessionStorage.getItem('roomCode');
+      const storedName = sessionStorage.getItem('playerName');
+      if (storedCode && storedName) {
+        socket.emit('rejoinRoom', { code: storedCode, playerName: storedName });
+      }
     });
 
     socket.on('gameState', (state) => {
@@ -279,29 +281,33 @@ export default function App() {
   // ── Handlers ──
   const createRoom = () => {
     if (!playerName.trim()) return;
-    socketRef.current?.emit('createRoom', { name: playerName, maxPlayers }, ({ code, color }) => {
+    socketRef.current?.emit("createRoom", { name: playerName, maxPlayers }, ({ code, color }) => {
       setRoomCode(code);
       setMyId(socketRef.current.id);
       setMyColor(color);
       updateUrl(code);
-      setScreen('lobby');
+      sessionStorage.setItem("roomCode", code);
+      sessionStorage.setItem("playerName", playerName.trim());
+      setScreen("lobby");
     });
   };
 
   const joinRoom = (codeOverride) => {
     const code = (codeOverride || joinCode).trim().toUpperCase();
     if (!playerName.trim() || !code) return;
-    socketRef.current?.emit('joinRoom', { name: playerName, code }, (res) => {
-      if (res.error) return showNotif('❌ ' + res.error);
+    socketRef.current?.emit("joinRoom", { name: playerName, code }, (res) => {
+      if (res.error) return showNotif("❌ " + res.error);
       setRoomCode(code);
       setMyId(socketRef.current.id);
       setMyColor(res.color);
       updateUrl(code);
-      setScreen('lobby');
+      sessionStorage.setItem("roomCode", code);
+      sessionStorage.setItem("playerName", playerName.trim());
+      setScreen("lobby");
     });
   };
 
-  const startGame = () => socketRef.current?.emit('startGame');
+  const startGame = () => { console.log('startGame emitted, roomCode:', roomCode, 'socketId:', socketRef.current?.id); socketRef.current?.emit('startGame', { code: roomCode }); };
 
   const handleKill = () => {
     if (!nearbyPlayer || killCooldown > 0 || myRole !== 'impostor') return;
@@ -349,6 +355,8 @@ export default function App() {
     setJoinCode('');
     setActiveTask(null);
     updateUrl(null);
+    sessionStorage.removeItem("roomCode");
+    sessionStorage.removeItem("playerName");
   };
 
   const taskProgress = myRole === 'crewmate'
