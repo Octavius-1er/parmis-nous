@@ -122,18 +122,18 @@ export default function App() {
       }
     });
 
-    socket.on('gameState', (state) => {
-      setGameState(state);
-      if (state.phase === 'meeting' && screenRef.current !== 'meeting') {
-        setScreen('meeting');
-        setChatMessages(state.chatMessages || []);
-      }
-      if (state.phase === 'game' && screenRef.current === 'meeting') {
-        setScreen('game');
-        setEjectedInfo(null);
-      }
-      if (state.phase === 'lobby') setScreen('lobby');
-    });
+  socket.on('gameState', (state) => {
+    setGameState(state);
+    if (state.phase === 'meeting' && screenRef.current !== 'meeting') {
+      setScreen('meeting');
+      setChatMessages(state.chatMessages || []);
+    }
+    if (state.phase === 'game' && (screenRef.current === 'meeting' || screenRef.current === 'lobby')) {
+      setScreen('game');
+      setEjectedInfo(null);
+    }
+    if (state.phase === 'lobby') setScreen('lobby');
+  });
 
     socket.on('yourRole', ({ role }) => {
       setMyRole(role);
