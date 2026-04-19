@@ -185,13 +185,19 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Met à jour roomCode sur le socket au cas où il aurait changé
     socket.roomCode = roomCode;
 
-    const player = room.players[socket.id];
-    if (!player?.isHost) {
-      console.log('startGame: joueur pas hôte', socket.id, Object.keys(room.players));
+    // Cherche l'hôte par isHost (socket.id peut avoir changé avec le polling)
+    const host = room.players[socket.id] || Object.values(room.players).find(p => p.isHost);
+    if (!host?.isHost) {
+      console.log('startGame: pas hôte', socket.id, Object.keys(room.players));
       return;
+    }
+    // Réassocie au nouveau socket.id si besoin
+    if (host.id !== socket.id) {
+      delete room.players[host.id];
+      host.id = socket.id;
+      room.players[socket.id] = host;
     }
 
     const playerList = Object.values(room.players);
