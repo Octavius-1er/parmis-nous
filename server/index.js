@@ -13,8 +13,7 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3001;
 
-// ── In-memory rooms ──
-const rooms = {}; // code -> room
+const rooms = {};
 
 const PLAYER_COLORS = ['red','blue','green','purple','yellow','orange','pink','white','brown','cyan','lime','maroon'];
 
@@ -41,6 +40,11 @@ function getRoom(code) {
   return rooms[code];
 }
 
+// Trouve la salle d'un joueur par son socket.id
+function getRoomBySocketId(socketId) {
+  return Object.values(rooms).find(r => r.players[socketId]);
+}
+
 function broadcastGameState(room) {
   io.to(room.code).emit('gameState', {
     phase: room.phase,
@@ -58,23 +62,17 @@ function checkWinCondition(room) {
   const aliveCrewmates = alivePlayers.filter(p => p.role === 'crewmate');
   const totalCrewmates = allPlayers.filter(p => p.role === 'crewmate');
 
-  // Mode solo (pas de crewmates) : on laisse jouer, pas de condition de victoire imposteur
-  if (totalCrewmates.length === 0) {
-    // Check task win uniquement (l'imposteur explore librement)
-    return false;
-  }
+  if (totalCrewmates.length === 0) return false;
 
   if (aliveImpostors.length === 0) {
     endGame(room, 'crewmate');
     return true;
   }
-  // Les imposteurs gagnent seulement s'il reste des crewmates à égaler
   if (aliveCrewmates.length > 0 && aliveImpostors.length >= aliveCrewmates.length) {
     endGame(room, 'impostor');
     return true;
   }
 
-  // Check task win
   const totalTasks = totalCrewmates.reduce((s, p) => s + (p.taskCount || 0), 0);
   const doneTasks = totalCrewmates.reduce((s, p) => s + (p.tasksDone || 0), 0);
   if (totalTasks > 0 && doneTasks >= totalTasks) {
@@ -92,6 +90,27 @@ function endGame(room, winner) {
 
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
+
+  // ── Rejoindre une salle existante après reconnexion ──
+  socket.on('rejoinRoom', ({ code, playerName }, cb) => {
+    const room = getRoom(code);
+    if (!room) return cb && cb({ error: 'Salle introuvable' });
+
+    // Chercher le joueur par son nom dans la salle
+    const existingPlayer = Object.values(room.players).find(p => p.name === playerName);
+    if (existingPlayer) {
+      // Mettre à jour l'ID du joueur avec le nouveau socket.id
+      const oldId = existingPlayer.id;
+      delete room.players[oldId];
+      existingPlayer.id = socket.id;
+      room.players[socket.id] = existingPlayer;
+    }
+
+    socket.join(code);
+    socket.roomCode = code;
+    broadcastGameState(room);
+    cb && cb({ ok: true });
+  });
 
   // ── Create room ──
   socket.on('createRoom', ({ name, maxPlayers }, cb) => {
@@ -157,15 +176,26 @@ io.on('connection', (socket) => {
   });
 
   // ── Start game ──
-  socket.on('startGame', () => {
-    const room = getRoom(socket.roomCode);
-    if (!room) return;
-    if (!room.players[socket.id]?.isHost) return;
+  socket.on('startGame', ({ code } = {}) => {
+    // Utilise le code envoyé par le client, ou celui stocké sur le socket
+    const roomCode = code || socket.roomCode;
+    const room = getRoom(roomCode);
+    if (!room) {
+      console.log('startGame: salle introuvable pour', roomCode);
+      return;
+    }
+
+    // Met à jour roomCode sur le socket au cas où il aurait changé
+    socket.roomCode = roomCode;
+
+    const player = room.players[socket.id];
+    if (!player?.isHost) {
+      console.log('startGame: joueur pas hôte', socket.id, Object.keys(room.players));
+      return;
+    }
 
     const playerList = Object.values(room.players);
     const count = playerList.length;
-
-    // Assign roles: 1 impostor per 5 players (min 1)
     const impostorCount = Math.max(1, Math.floor(count / 5));
     const shuffled = [...playerList].sort(() => Math.random() - 0.5);
     const impostors = new Set(shuffled.slice(0, impostorCount).map(p => p.id));
@@ -184,7 +214,6 @@ io.on('connection', (socket) => {
     room.chatMessages = [];
     room.votes = {};
 
-    // Notify each player of their role
     playerList.forEach(p => {
       io.to(p.id).emit('yourRole', { role: p.role });
     });
@@ -217,10 +246,7 @@ io.on('connection', (socket) => {
     room.deadBodies.push(body);
 
     io.to(room.code).emit('playerKilled', { targetId, bodies: room.deadBodies });
-
-    if (!checkWinCondition(room)) {
-      broadcastGameState(room);
-    }
+    if (!checkWinCondition(room)) broadcastGameState(room);
   });
 
   // ── Report body ──
@@ -279,14 +305,13 @@ io.on('connection', (socket) => {
     if (!room || room.phase !== 'meeting') return;
     const voter = room.players[socket.id];
     if (!voter || !voter.alive) return;
-    if (room.votes[socket.id] !== undefined) return; // already voted
+    if (room.votes[socket.id] !== undefined) return;
 
-    room.votes[socket.id] = targetId || null; // null = skip
+    room.votes[socket.id] = targetId || null;
 
     const alivePlayers = Object.values(room.players).filter(p => p.alive);
     const votedCount = alivePlayers.filter(p => room.votes[p.id] !== undefined).length;
 
-    // When everyone voted, resolve
     if (votedCount >= alivePlayers.length) {
       resolveVotes(room);
     }
@@ -302,9 +327,7 @@ io.on('connection', (socket) => {
     player.tasksDone = Math.min((player.tasksDone || 0) + 1, player.taskCount);
     io.to(room.code).emit('taskCompleted', { playerId: socket.id, taskId });
 
-    if (!checkWinCondition(room)) {
-      broadcastGameState(room);
-    }
+    if (!checkWinCondition(room)) broadcastGameState(room);
   });
 
   // ── Disconnect ──
@@ -322,14 +345,11 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Transfer host if needed
     if (!remaining.some(p => p.isHost)) {
       remaining[0].isHost = true;
     }
 
-    if (room.phase === 'game') {
-      checkWinCondition(room);
-    }
+    if (room.phase === 'game') checkWinCondition(room);
     broadcastGameState(room);
   });
 });
@@ -365,7 +385,6 @@ function resolveVotes(room) {
     }
   }
 
-  // Resume game after delay
   setTimeout(() => {
     room.phase = 'game';
     room.votes = {};
