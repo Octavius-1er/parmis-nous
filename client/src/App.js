@@ -618,6 +618,7 @@ function GameCanvas({gs,myId,myRole,myColor,myTasks,tPct,isAlive,killCD,flash,no
   const posRef  = useRef(null);
   const camRef  = useRef({x:0,y:0});
   const keysRef = useRef({});
+  const joyRef  = useRef({dx:0,dy:0}); // joystick virtuel
   const rafRef  = useRef(null);
   const sendRef = useRef(0);
   const gsRef   = useRef(gs);
@@ -665,12 +666,15 @@ function GameCanvas({gs,myId,myRole,myColor,myTasks,tPct,isAlive,killCD,flash,no
       const W=canvas.width, H=canvas.height;
       if(!posRef.current) posRef.current={x:820,y:230};
 
-      // Movement
+      // Movement (clavier + joystick tactile)
       if(alRef.current){
         const k=keysRef.current;
+        const joy=joyRef.current;
         let {x,y}=posRef.current;
-        const dx=(k['ArrowRight']||k['d']?1:0)-(k['ArrowLeft']||k['q']||k['a']?1:0);
-        const dy=(k['ArrowDown'] ||k['s']?1:0)-(k['ArrowUp']  ||k['z']||k['w']?1:0);
+        let dx=(k['ArrowRight']||k['d']?1:0)-(k['ArrowLeft']||k['q']||k['a']?1:0);
+        let dy=(k['ArrowDown'] ||k['s']?1:0)-(k['ArrowUp']  ||k['z']||k['w']?1:0);
+        // Joystick override si actif
+        if(Math.abs(joy.dx)>0.05||Math.abs(joy.dy)>0.05){ dx=joy.dx; dy=joy.dy; }
         if(dx||dy){
           const len=Math.sqrt(dx*dx+dy*dy)||1;
           x=Math.max(60,Math.min(WORLD_W-60, x+(dx/len)*SPEED*dt));
@@ -796,8 +800,85 @@ function GameCanvas({gs,myId,myRole,myColor,myTasks,tPct,isAlive,killCD,flash,no
 
       {notif && <div className="notif">{notif}</div>}
       {actTask && <TaskModal task={actTask} onComplete={onTask} onClose={()=>setAct(null)}/>}
+      <Joystick joyRef={joyRef} onAction={()=>{
+        if(near.task && myRole==='crewmate'){ snd('btn'); setAct(near.task); }
+        else if(near.body){ onReport(near.body.id); }
+        else if(near.emrg){ onEmergency(); }
+        else if(canKill){ onKill(near.player.id); }
+      }} actionLabel={
+        near.body?'🚨':near.task?'⚡':near.emrg?'🚨':canKill?'🔪':null
+      }/>
       <div className="ctrl-hint">ZQSD · ↑↓←→ · E pour tâche</div>
     </div>
+  );
+}
+
+
+// ═══════ JOYSTICK VIRTUEL (mobile) ═══════════════════════════════════════════
+function Joystick({joyRef, onAction, actionLabel}) {
+  const baseRef = useRef(null);
+  const stickRef = useRef(null);
+  const touchRef = useRef(null);
+  const [stickPos, setStickPos] = useState({x:0,y:0});
+  const [active, setActive] = useState(false);
+
+  const MAX_R = 48;
+
+  const onTouchStart = (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    touchRef.current = touch.identifier;
+    setActive(true);
+  };
+
+  const onTouchMove = (e) => {
+    e.preventDefault();
+    const base = baseRef.current;
+    if(!base) return;
+    const touch = Array.from(e.touches).find(t=>t.identifier===touchRef.current);
+    if(!touch) return;
+    const rect = base.getBoundingClientRect();
+    const cx = rect.left + rect.width/2;
+    const cy = rect.top  + rect.height/2;
+    let dx = touch.clientX - cx;
+    let dy = touch.clientY - cy;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    if(dist > MAX_R){ dx = dx/dist*MAX_R; dy = dy/dist*MAX_R; }
+    setStickPos({x:dx,y:dy});
+    joyRef.current = {dx: dx/MAX_R, dy: dy/MAX_R};
+  };
+
+  const onTouchEnd = (e) => {
+    e.preventDefault();
+    setStickPos({x:0,y:0});
+    setActive(false);
+    joyRef.current = {dx:0,dy:0};
+  };
+
+  return (
+    <>
+      {/* Joystick base — bas gauche */}
+      <div
+        ref={baseRef}
+        className={`joy-base ${active?'joy-active':''}`}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchEnd}
+      >
+        <div
+          ref={stickRef}
+          className="joy-stick"
+          style={{transform:`translate(${stickPos.x}px,${stickPos.y}px)`}}
+        />
+      </div>
+      {/* Bouton action — bas droite */}
+      {actionLabel && (
+        <button className="joy-action" onTouchStart={e=>{e.preventDefault();onAction();}}>
+          {actionLabel}
+        </button>
+      )}
+    </>
   );
 }
 
